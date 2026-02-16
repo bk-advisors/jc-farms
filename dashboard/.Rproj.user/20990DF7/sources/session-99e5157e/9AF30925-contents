@@ -1,0 +1,294 @@
+---
+title: "JC Poultry Farm Dashboard"
+format: dashboard
+editor: visual
+---
+
+```{r warning=FALSE, message=FALSE, echo=FALSE}
+
+# -----------------------------------------------------------
+# Load libraries
+# -----------------------------------------------------------
+
+library(tidyverse)
+library(lubridate)
+library(highcharter)
+library(DT)
+library(bslib)
+library(bsicons)
+library(shiny)
+library(gt)
+library(glue)
+library(gtExtras)
+library(kableExtra)
+library(readxl)
+library(scales)
+library(formattable)
+library(robotoolbox)
+library(dm)
+library(qcc)
+library(plotly)
+library(knitr)
+library(gridExtra)
+library(ggthemes)
+
+# Source functions
+source(file="./R-scripts/00-functions.R")
+
+# -----------------------------------------------------------
+# 1. Connect remotely to Kobotoolbox database via the API
+#    
+# -----------------------------------------------------------
+
+## The first step is to get your API token from your Kobotoolbox account
+
+
+mytoken <- "07cdf3134d0f4352b54cf83edaa59101bc02990e"
+
+
+## With the token you can now setup the robotoolbox package.
+
+kobo_setup(url = "https://kf.kobotoolbox.org/", token = mytoken)
+
+# Now you can access all your projects and read the data from the project you picked. 
+# You can list project using kobo_asset_list().
+
+my_projects_list <- kobo_asset_list()
+
+# Let’s pick the second project and load it
+
+uid <- my_projects_list$uid[1]
+
+# Initialize it as an asset
+asset <- kobo_asset(uid)
+
+# With the asset you can now read your data
+df_raw <- kobo_data(asset)
+
+# -----------------------------------------------------------
+# 2. (Optional) Clean or rename columns for easier reference
+# -----------------------------------------------------------
+# Sometimes R automatically converts special characters (spaces, parentheses).
+# If your 'Amount (UGX)' column is not easy to reference, rename it:
+
+
+df <- df_raw |> 
+  rename(
+    Amount_UGX = amount_manual,
+    Batch_Number = batch
+  ) |> 
+  filter( account_type != "capex") |> 
+  filter(Batch_Number != "3") |> 
+  select(!("_attachments"))
+
+transactions <- df
+
+# write.csv(df, "data/jc_farms_transaction_data_20251228.csv",row.names = FALSE)
+
+```
+
+
+
+# Batch 15 (Closed)
+
+
+```{r}
+kpis15 <- jc_dashboard_kpis(df,"15",390)
+
+#value_box(
+ # title = "Cost of Production",
+#  value = tags$p(kpis15[1], style = "font-size: 150%;"),
+ # showcase = bsicons::bs_icon("twitter"),
+  #theme = "pink"
+#)
+
+vbs15 <- list(
+value_box(
+  title = "Revenue",
+  value = tags$p(kpis15[1], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("bank2"),
+  theme = "primary"
+),
+
+value_box(
+  title = "Cost of Production",
+  value = tags$p(kpis15[2], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("twitter"),
+  theme = "pink"
+),
+
+value_box(
+  title = "Net Profit",
+  value = tags$p(kpis15[3], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("cash"),
+  theme = "primary"
+)
+)
+
+layout_column_wrap(
+  width = "250px",
+  !!!vbs15
+)
+
+
+
+```
+
+## Per Bird
+
+
+```{r}
+value_box(
+  title = "Cost per Bird",
+  value = tags$p(kpis15[4], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("twitter"),
+  theme = "pink"
+)
+
+value_box(
+  title = "Profit per Bird",
+  value = tags$p(kpis15[5], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("cash"),
+  theme = "primary"
+)
+
+```
+
+
+# Batch 16 (Closed)
+
+
+```{r}
+kpis16 <- jc_dashboard_kpis(df,"16",500)
+
+#value_box(
+ # title = "Cost of Production",
+  #value = tags$p(kpis16[1], style = "font-size: 150%;"),
+  #showcase = bsicons::bs_icon("twitter"),
+  #theme = "pink"
+#)
+
+vbs16 <- list(
+value_box(
+  title = "Revenue",
+  value = tags$p(kpis16[1], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("bank2"),
+  theme = "primary"
+),
+
+value_box(
+  title = "Cost of Production",
+  value = tags$p(kpis16[2], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("twitter"),
+  theme = "pink"
+),
+
+value_box(
+  title = "Net Profit",
+  value = tags$p(kpis16[3], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("cash"),
+  theme = "primary"
+)
+)
+
+layout_column_wrap(
+  width = "250px",
+  !!!vbs16
+)
+
+
+
+```
+
+## Per Bird
+
+
+```{r}
+value_box(
+  title = "Cost per Bird",
+  value = tags$p(kpis16[4], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("twitter"),
+  theme = "pink"
+)
+
+value_box(
+  title = "Profit per Bird",
+  value = tags$p(kpis16[5], style = "font-size: 150%;"),
+  showcase = bsicons::bs_icon("cash"),
+  theme = "primary"
+)
+
+```
+
+
+# Batch Trends and Patterns Analysis
+
+Click link: 
+
+[JC Trends Report](https://mattykuch.github.io/jc-farms/dashboard/trends_jc_farms.html){.external target="_blank"}
+
+# Profit / Loss Statement
+```{r}
+# Read the Excel file
+
+pnl_data <- read_excel("data/JC Poultry Farm - Business Operating Model_v1_250323.xlsx", 
+                      sheet = "PnL",
+                      skip = 3)  # Skip the first 3 rows to get to the data
+
+# Clean and transform the data
+pnl_statement <- pnl_data %>%
+  # Remove any NA rows
+  filter(!is.na(`Category`)) %>%
+  # Rename columns for clarity
+  rename(
+    Category = `Category`,
+    description = `Description`,
+    "Batch 1" = `Amount (UGX)...3`,
+    "Batch 2" = `Amount (UGX)...4`,
+    "Batch 3" = `Amount (UGX)...5`
+  ) %>%
+  # Select only the relevant columns
+  select(Category, "Batch 1", "Batch 2", "Batch 3")
+
+# Get Batch 4, 5 and 6 dataframes 
+
+batch4_full <- jc_pnl_by_batch(df_raw,"4")
+
+batch5_full <- jc_pnl_by_batch(df_raw,"5")
+
+batch6_full <- jc_pnl_by_batch(df_raw,"6")
+
+# Merge with original PnL
+final_pnl <- pnl_statement %>%
+  left_join(batch4_full, by = "Category") |> 
+  left_join(batch5_full, by = "Category") |> 
+  left_join(batch6_full, by = "Category")
+
+# Format numbers with commas
+final_pnl <- final_pnl %>%
+  mutate(across(starts_with("Batch"), ~format(., big.mark = ",", scientific = FALSE)))
+
+final_pnl |> 
+  kbl(caption = "JC Farms Profit/Loss Statement") |>
+  kable_paper("striped", full_width = F) %>%
+  add_indent(c(2, 4, 5,6,7,9,10,11,12,13)) |> 
+  row_spec(c(1,3,8,14), bold = T, color = "white", background = "#4287f5") 
+
+
+  
+
+
+```
+
+
+# Data
+
+```{r}
+
+#| title: Batch Data Table 
+
+batch_data <- df |>
+  select(-c("start","end"))
+
+datatable(batch_data, filter = "top")
+```

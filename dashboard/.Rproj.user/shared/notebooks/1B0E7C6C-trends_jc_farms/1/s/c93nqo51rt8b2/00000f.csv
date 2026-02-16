@@ -1,0 +1,62 @@
+"0","#| warning: false"
+"0","#| message: false"
+"0",""
+"0","library(tidyverse)"
+"0","library(gt)"
+"0",""
+"0","# Read transaction data"
+"0","tx <- readr::read_csv(""data/jc_farms_transaction_data_20251228.csv"", show_col_types = FALSE) %>%"
+"0","  mutate("
+"0","    Batch = as.integer(Batch_Number),"
+"0","    transaction_date = as.Date(transaction_date)"
+"0","  ) %>%"
+"0","  select(Batch, Amount_UGX, account_type, category_cogs, quantity, transaction_date)"
+"0",""
+"0","# Summarize batches 4-14: key financial and operational metrics"
+"0","batch_summary <- tx %>%"
+"0","  filter(between(Batch, 4, 14)) %>%"
+"0","  group_by(Batch) %>%"
+"0","  summarise("
+"0","    revenue = sum(Amount_UGX[account_type == ""revenues""], na.rm = TRUE),"
+"0","    cost = sum(Amount_UGX[account_type %in% c(""cogs"", ""opex"")], na.rm = TRUE),"
+"0","    feed_cost = sum(Amount_UGX[category_cogs == ""cogs_feeds""], na.rm = TRUE),"
+"0","    birds = sum(quantity[account_type == ""revenues""], na.rm = TRUE),"
+"0","    .groups = ""drop"""
+"0","  ) %>%"
+"0","  mutate("
+"0","    profit_margin = if_else(revenue > 0, 100 * (revenue - cost) / revenue, NA_real_),"
+"0","    cost_per_bird = if_else(birds > 0, cost / birds, NA_real_),"
+"0","    fcr = if_else(revenue > 0, feed_cost / revenue, NA_real_),"
+"0","    avg_sale_price = if_else(birds > 0, revenue / birds, NA_real_)"
+"0","  ) %>%"
+"0","  select(Batch, profit_margin, cost_per_bird, fcr, avg_sale_price)"
+"0",""
+"0","# SPC plot: plot metric with control limits (mean ± 3σ)"
+"0","spc_plot <- function(df, metric, ylab, title) {"
+"0","  vals <- na.omit(df[[metric]])"
+"0","  mu <- mean(vals)"
+"0","  sig <- sd(vals)"
+"0",""
+"0","  ggplot(df, aes(x = factor(Batch), y = .data[[metric]], group = 1)) +"
+"0","    geom_line(color = ""#2E86AB"", linewidth = 0.7) +"
+"0","    geom_point(color = ""#2E86AB"", size = 2.5) +"
+"0","    geom_hline(aes(yintercept = mu), color = ""#F24236"", linewidth = 0.5) +"
+"0","    geom_hline(aes(yintercept = mu + 3 * sig), linetype = ""dashed"", color = ""#F24236"", linewidth = 0.4) +"
+"0","    geom_hline(aes(yintercept = mu - 3 * sig), linetype = ""dashed"", color = ""#F24236"", linewidth = 0.4) +"
+"0","    labs(x = ""Batch"", y = ylab, title = title) +"
+"0","    theme_minimal(base_size = 11)"
+"0",""
+"2","Error: Incomplete expression: spc_plot <- function(df, metric, ylab, title) {
+  vals <- na.omit(df[[metric]])
+  mu <- mean(vals)
+  sig <- sd(vals)
+
+  ggplot(df, aes(x = factor(Batch), y = .data[[metric]], group = 1)) +
+    geom_line(color = ""#2E86AB"", linewidth = 0.7) +
+    geom_point(color = ""#2E86AB"", size = 2.5) +
+    geom_hline(aes(yintercept = mu), color = ""#F24236"", linewidth = 0.5) +
+    geom_hline(aes(yintercept = mu + 3 * sig), linetype = ""dashed"", color = ""#F24236"", linewidth = 0.4) +
+    geom_hline(aes(yintercept = mu - 3 * sig), linetype = ""dashed"", color = ""#F24236"", linewidth = 0.4) +
+    labs(x = ""Batch"", y = ylab, title = title) +
+    theme_minimal(base_size = 11)
+"

@@ -1,0 +1,174 @@
+---
+title: "JC Poultry Farm Dashboard"
+format: dashboard
+css: style.css
+---
+
+```{r}
+#| label: setup
+
+library(tidyverse)
+library(lubridate)
+library(DT)
+library(bslib)
+library(bsicons)
+library(shiny)
+library(gt)
+library(glue)
+library(kableExtra)
+library(readxl)
+library(scales)
+library(formattable)
+library(robotoolbox)
+library(plotly)
+library(knitr)
+
+source(file = "./R-scripts/00-functions.R")
+
+# Connect to KoboToolbox and load data
+df_raw <- jc_connect_kobo()
+df <- jc_clean_data(df_raw)
+
+# Current batches (15+) sorted newest first
+all_batches <- sort(unique(as.integer(as.character(df$Batch_Number))), decreasing = TRUE)
+all_batches <- all_batches[all_batches >= 15]
+```
+
+# Batches
+
+## Row
+
+```{r}
+#| title: All Batches
+
+# Build a tabbed panel for every batch (newest first)
+batch_tabs <- lapply(all_batches, function(b) {
+  b_str <- as.character(b)
+  kpis <- jc_dashboard_kpis(df, b_str)
+
+  has_revenue <- kpis$revenue > 0
+  status_badge <- if (has_revenue) {
+    tags$span(class = "badge bg-success", "Closed")
+  } else {
+    tags$span(class = "badge bg-warning", "Active")
+  }
+
+  profit_theme <- if (kpis$net_profit >= 0) "success" else "danger"
+  margin_text <- if (!is.na(kpis$profit_margin)) paste0(kpis$profit_margin, "%") else "N/A"
+
+  content <- tagList(
+    tags$div(
+      class = "mb-3",
+      status_badge,
+      tags$span(class = "ms-2 text-muted",
+                paste0(kpis$num_birds, " birds | Margin: ", margin_text))
+    ),
+    layout_column_wrap(
+      width = "250px",
+      value_box(
+        title = "Revenue (UGX)", value = kpis$revenue_fmt,
+        showcase = bsicons::bs_icon("bank2"), theme = "primary"
+      ),
+      value_box(
+        title = "Cost of Production (UGX)", value = kpis$cost_fmt,
+        showcase = bsicons::bs_icon("receipt"), theme = "pink"
+      ),
+      value_box(
+        title = "Net Profit (UGX)", value = kpis$net_profit_fmt,
+        showcase = bsicons::bs_icon("cash-stack"), theme = profit_theme
+      )
+    ),
+    layout_column_wrap(
+      width = "250px",
+      value_box(
+        title = "Cost/Bird (UGX)", value = kpis$cost_per_bird_fmt,
+        showcase = bsicons::bs_icon("piggy-bank"), theme = "pink"
+      ),
+      value_box(
+        title = "Profit/Bird (UGX)", value = kpis$profit_per_bird_fmt,
+        showcase = bsicons::bs_icon("cash"),
+        theme = if (!is.na(kpis$profit_per_bird) && kpis$profit_per_bird >= 0) "success" else "danger"
+      )
+    )
+  )
+
+  bslib::nav_panel(title = paste("Batch", b), content)
+})
+
+do.call(bslib::navset_card_tab, batch_tabs)
+```
+
+
+# Trends & Analysis
+
+## Row
+
+::: {.card}
+### Batch Trends and Patterns Analysis
+
+Click link below to view the full SPC analysis report with financial summaries, bird production efficiency, and control charts:
+
+[JC Trends Report](trends.html){.external target="_blank"}
+:::
+
+
+# P&L Statement
+
+## Row
+
+```{r}
+#| title: Profit & Loss Statement — All Batches
+
+# Batches 1-3 from Excel
+pnl_data <- read_excel("data/JC Poultry Farm - Business Operating Model_v1_250323.xlsx",
+                        sheet = "PnL", skip = 3)
+
+pnl_statement <- pnl_data %>%
+  filter(!is.na(`Category`)) %>%
+  rename(
+    Category = `Category`,
+    "Batch 1" = `Amount (UGX)...3`,
+    "Batch 2" = `Amount (UGX)...4`,
+    "Batch 3" = `Amount (UGX)...5`
+  ) %>%
+  select(Category, "Batch 1", "Batch 2", "Batch 3")
+
+# Batches 4+ from API data (dynamically)
+api_batches <- sort(unique(as.integer(as.character(df_raw$batch[as.character(df_raw$batch) != "3"]))))
+api_batches <- api_batches[api_batches >= 4]
+
+final_pnl <- pnl_statement
+for (b in api_batches) {
+  batch_pnl <- jc_pnl_by_batch(df_raw, as.character(b))
+  final_pnl <- final_pnl %>% left_join(batch_pnl, by = "Category")
+}
+
+# Format all numeric columns
+final_pnl <- final_pnl %>%
+  mutate(across(starts_with("Batch"), ~format(., big.mark = ",", scientific = FALSE)))
+
+# Determine row indices for styling
+indent_rows <- c(2, 4, 5, 6, 7, 9, 10, 11, 12, 13)
+header_rows <- c(1, 3, 8, 14)
+
+final_pnl %>%
+  kbl(caption = "JC Farms Profit & Loss Statement") %>%
+  kable_paper("striped", full_width = FALSE) %>%
+  add_indent(indent_rows) %>%
+  row_spec(header_rows, bold = TRUE, color = "white", background = "#4287f5")
+```
+
+
+# Data
+
+## Row
+
+```{r}
+#| title: Transaction Data
+
+batch_data <- df %>%
+  select(-c("start", "end"))
+
+datatable(batch_data, filter = "top",
+          options = list(pageLength = 25, scrollX = TRUE))
+```

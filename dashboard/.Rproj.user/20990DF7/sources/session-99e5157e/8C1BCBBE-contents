@@ -1,0 +1,452 @@
+---
+title: "JC Poultry Farm Dashboard"
+format: dashboard
+css: style.css
+---
+
+```{r}
+#| label: setup
+
+library(tidyverse)
+library(lubridate)
+library(DT)
+library(bslib)
+library(bsicons)
+library(shiny)
+library(gt)
+library(glue)
+library(kableExtra)
+library(readxl)
+library(scales)
+library(formattable)
+library(robotoolbox)
+library(plotly)
+library(knitr)
+
+source(file = "./R-scripts/00-functions.R")
+
+# Connect to KoboToolbox and load data
+df_raw <- jc_connect_kobo()
+df <- jc_clean_data(df_raw)
+
+# Compute batch summary for SPC and trends
+batch_summ <- jc_batch_summary(df)
+
+# Identify current batches (15+) — older batches archived in archive.html
+all_batches <- sort(unique(as.integer(as.character(df$Batch_Number))), decreasing = TRUE)
+all_batches <- all_batches[all_batches >= 15]
+latest_batch <- as.character(all_batches[1])
+prev_batch <- if (length(all_batches) > 1) as.character(all_batches[2]) else NULL
+
+# Batch summary filtered to current batches (for overview KPIs)
+batch_summ_current <- batch_summ |> filter(Batch >= 15)
+
+# KPIs for latest and previous batch
+kpi_latest <- jc_dashboard_kpis(df, latest_batch)
+kpi_prev <- if (!is.null(prev_batch)) jc_dashboard_kpis(df, prev_batch) else NULL
+
+# Recent batches for sparklines (last 6 of current batches)
+recent <- tail(batch_summ_current, 6)
+
+# Helper: format change vs previous batch
+fmt_change <- function(current, previous) {
+  if (is.null(previous) || is.na(previous) || is.na(current)) return("")
+  diff <- current - previous
+  sign <- if (diff >= 0) "+" else ""
+  paste0(sign, format(round(diff), big.mark = ","))
+}
+```
+
+# Overview
+
+## Row {height=30%}
+
+```{r}
+#| title: Farm Performance at a Glance
+
+# Cumulative profit across all batches
+total_profit <- sum(batch_summ$profit, na.rm = TRUE)
+total_profit_fmt <- format(total_profit, big.mark = ",", scientific = FALSE)
+profit_theme <- if (total_profit >= 0) "success" else "danger"
+
+value_box(
+  title = "Total Cumulative Profit (UGX)",
+  value = tags$p(total_profit_fmt, style = "font-size: 130%;"),
+  showcase = bsicons::bs_icon("graph-up-arrow"),
+  theme = profit_theme
+)
+```
+
+```{r}
+#| title: Latest Batch Margin
+
+margin_theme <- jc_kpi_theme(kpi_latest$profit_margin, 20, 10, higher_is_better = TRUE)
+
+value_box(
+  title = glue("Batch {latest_batch} — Profit Margin"),
+  value = tags$p(paste0(kpi_latest$profit_margin, "%"), style = "font-size: 130%;"),
+  showcase = bsicons::bs_icon("percent"),
+  theme = margin_theme
+)
+```
+
+```{r}
+#| title: Avg Cost per Bird (Last 6)
+
+avg_cpb <- round(mean(recent$cost_per_bird, na.rm = TRUE))
+avg_cpb_fmt <- format(avg_cpb, big.mark = ",", scientific = FALSE)
+cpb_trend <- if (nrow(recent) >= 2 && !is.na(recent$cost_per_bird[nrow(recent)]) && !is.na(recent$cost_per_bird[nrow(recent) - 1])) {
+  if (recent$cost_per_bird[nrow(recent)] <= recent$cost_per_bird[nrow(recent) - 1]) "success" else "warning"
+} else "primary"
+
+value_box(
+  title = "Avg Cost/Bird (Recent Batches, UGX)",
+  value = tags$p(avg_cpb_fmt, style = "font-size: 130%;"),
+  showcase = bsicons::bs_icon("piggy-bank"),
+  theme = cpb_trend
+)
+```
+
+```{r}
+#| title: Latest Mortality Rate
+
+mort_theme <- jc_kpi_theme(kpi_latest$mortality_rate, 4, 7, higher_is_better = FALSE)
+
+value_box(
+  title = glue("Batch {latest_batch} — Mortality Rate"),
+  value = tags$p(
+    if (!is.na(kpi_latest$mortality_rate)) paste0(kpi_latest$mortality_rate, "%") else "N/A",
+    style = "font-size: 130%;"
+  ),
+  showcase = bsicons::bs_icon("heart-pulse"),
+  theme = mort_theme
+)
+```
+
+## Row {height=35%}
+
+### Column
+
+```{r}
+#| title: !expr 'glue("Latest Batch: Batch {latest_batch}")'
+
+# Comparison annotations
+margin_change <- if (!is.null(kpi_prev) && !is.na(kpi_latest$profit_margin) && !is.na(kpi_prev$profit_margin)) {
+  diff <- kpi_latest$profit_margin - kpi_prev$profit_margin
+  sign <- if (diff >= 0) "+" else ""
+  paste0(" (", sign, round(diff, 1), "pp vs Batch ", prev_batch, ")")
+} else ""
+
+cpb_change <- if (!is.null(kpi_prev) && !is.na(kpi_latest$cost_per_bird) && !is.na(kpi_prev$cost_per_bird)) {
+  paste0(" (", fmt_change(kpi_latest$cost_per_bird, kpi_prev$cost_per_bird), " vs prev)")
+} else ""
+
+latest_vbs <- list(
+  value_box(
+    title = "Revenue",
+    value = tags$p(kpi_latest$revenue_fmt, style = "font-size: 120%;"),
+    showcase = bsicons::bs_icon("bank2"),
+    theme = "primary"
+  ),
+  value_box(
+    title = "Cost of Production",
+    value = tags$p(kpi_latest$cost_fmt, style = "font-size: 120%;"),
+    showcase = bsicons::bs_icon("receipt"),
+    theme = "pink"
+  ),
+  value_box(
+    title = "Net Profit",
+    value = tags$p(kpi_latest$net_profit_fmt, style = "font-size: 120%;"),
+    showcase = bsicons::bs_icon("cash-stack"),
+    theme = if (kpi_latest$net_profit >= 0) "success" else "danger"
+  ),
+  value_box(
+    title = paste0("Cost/Bird", cpb_change),
+    value = tags$p(kpi_latest$cost_per_bird_fmt, style = "font-size: 120%;"),
+    showcase = bsicons::bs_icon("piggy-bank"),
+    theme = "pink"
+  ),
+  value_box(
+    title = paste0("Profit/Bird"),
+    value = tags$p(kpi_latest$profit_per_bird_fmt, style = "font-size: 120%;"),
+    showcase = bsicons::bs_icon("cash"),
+    theme = if (!is.na(kpi_latest$profit_per_bird) && kpi_latest$profit_per_bird >= 0) "success" else "danger"
+  )
+)
+
+layout_column_wrap(
+  width = "200px",
+  !!!latest_vbs
+)
+```
+
+## Row {height=35%}
+
+### Column
+
+```{r}
+#| title: Profit Margin Trend (SPC)
+jc_spc_plotly(batch_summ, "profit_margin", "Profit Margin (%)", "Profit Margin per Batch")
+```
+
+### Column
+
+```{r}
+#| title: Cost per Bird Trend (SPC)
+jc_spc_plotly(batch_summ, "cost_per_bird", "Cost per Bird (UGX)", "Cost Per Bird per Batch")
+```
+
+
+# Batch Details
+
+## Row
+
+```{r}
+#| title: Current Batches (15+)
+
+# Archive link
+tags$div(
+  class = "alert alert-info mb-3",
+  tags$strong("Looking for older batches?"),
+  " Batches 4–14 are available in the ",
+  tags$a(href = "archive.html", "Batch Archive Report"), "."
+)
+
+# Build a tabbed panel for every batch (newest first)
+batch_tabs <- lapply(all_batches, function(b) {
+  b_str <- as.character(b)
+  kpis <- jc_dashboard_kpis(df, b_str)
+
+  has_revenue <- kpis$revenue > 0
+  status_badge <- if (has_revenue) {
+    tags$span(class = "badge bg-success", "Closed")
+  } else {
+    tags$span(class = "badge bg-warning", "Active")
+  }
+
+  profit_theme <- if (kpis$net_profit >= 0) "success" else "danger"
+  margin_text <- if (!is.na(kpis$profit_margin)) paste0(kpis$profit_margin, "%") else "N/A"
+
+  content <- tagList(
+    tags$div(
+      class = "mb-3",
+      status_badge,
+      tags$span(class = "ms-2 text-muted",
+                paste0(kpis$num_birds, " birds | Margin: ", margin_text))
+    ),
+    layout_column_wrap(
+      width = "180px",
+      value_box(
+        title = "Revenue (UGX)", value = kpis$revenue_fmt,
+        showcase = bsicons::bs_icon("bank2"), theme = "primary"
+      ),
+      value_box(
+        title = "Cost (UGX)", value = kpis$cost_fmt,
+        showcase = bsicons::bs_icon("receipt"), theme = "pink"
+      ),
+      value_box(
+        title = "Net Profit (UGX)", value = kpis$net_profit_fmt,
+        showcase = bsicons::bs_icon("cash-stack"), theme = profit_theme
+      ),
+      value_box(
+        title = "Cost/Bird (UGX)", value = kpis$cost_per_bird_fmt,
+        showcase = bsicons::bs_icon("piggy-bank"), theme = "pink"
+      ),
+      value_box(
+        title = "Profit/Bird (UGX)", value = kpis$profit_per_bird_fmt,
+        showcase = bsicons::bs_icon("cash"),
+        theme = if (!is.na(kpis$profit_per_bird) && kpis$profit_per_bird >= 0) "success" else "danger"
+      )
+    )
+  )
+
+  bslib::nav_panel(title = paste("Batch", b), content)
+})
+
+do.call(bslib::navset_card_tab, batch_tabs)
+```
+
+
+# SPC Analysis
+
+## Row
+
+### Column
+
+```{r}
+#| title: Financial Summary — Current Batches
+
+batch_summ_current %>%
+  select(Batch, revenue, cost, profit, profit_per_bird, profit_margin, cost_per_bird, avg_sale_price) %>%
+  gt() %>%
+  fmt_number(columns = c(revenue, cost, profit), decimals = 0) %>%
+  fmt_number(columns = c(profit_per_bird, cost_per_bird, avg_sale_price), decimals = 0) %>%
+  fmt_number(columns = c(profit_margin), decimals = 1) %>%
+  cols_label(
+    Batch = "Batch",
+    revenue = "Revenue (UGX)",
+    cost = "Cost (UGX)",
+    profit = "Net Profit (UGX)",
+    profit_per_bird = "Profit/Bird (UGX)",
+    profit_margin = "Margin (%)",
+    cost_per_bird = "Cost/Bird (UGX)",
+    avg_sale_price = "Avg Price (UGX)"
+  ) %>%
+  tab_header(title = "Financial Performance Summary") %>%
+  data_color(
+    columns = profit_margin,
+    fn = function(x) ifelse(is.na(x), "#6c757d", ifelse(x >= 20, "#198754", ifelse(x >= 10, "#ffc107", "#dc3545")))
+  )
+```
+
+## Row
+
+### Column
+
+```{r}
+#| title: Bird Production Efficiency
+
+batch_summ_current %>%
+  select(Batch, birds_purchased, birds_sold, birds_mortality, mortality_rate) %>%
+  gt() %>%
+  fmt_number(columns = c(birds_purchased, birds_sold, birds_mortality), decimals = 0) %>%
+  fmt_number(columns = c(mortality_rate), decimals = 1) %>%
+  cols_label(
+    Batch = "Batch",
+    birds_purchased = "Purchased",
+    birds_sold = "Sold",
+    birds_mortality = "Lost (Mortality)",
+    mortality_rate = "Mortality %"
+  ) %>%
+  tab_header(title = "Bird Production Summary") %>%
+  data_color(
+    columns = mortality_rate,
+    fn = function(x) ifelse(is.na(x), "#6c757d", ifelse(x <= 4, "#198754", ifelse(x <= 7, "#ffc107", "#dc3545")))
+  )
+```
+
+## Row
+
+### Column
+
+```{r}
+#| title: SPC — Profit Margin
+jc_spc_plotly(batch_summ, "profit_margin", "Profit Margin (%)", "Profit Margin per Batch")
+```
+
+### Column
+
+```{r}
+#| title: SPC — Cost per Bird
+jc_spc_plotly(batch_summ, "cost_per_bird", "Cost per Bird (UGX)", "Cost Per Bird per Batch")
+```
+
+## Row
+
+### Column
+
+```{r}
+#| title: SPC — Feed Conversion Ratio
+jc_spc_plotly(batch_summ, "fcr", "FCR", "Feed Cost as % of Revenue (FCR)")
+```
+
+### Column
+
+```{r}
+#| title: SPC — Average Sale Price
+jc_spc_plotly(batch_summ, "avg_sale_price", "Avg Sale Price (UGX)", "Average Sale Price per Batch")
+```
+
+## Row
+
+### Column
+
+```{r}
+#| title: SPC — Mortality Rate
+jc_spc_plotly(batch_summ, "mortality_rate", "Mortality Rate (%)", "Bird Mortality Rate per Batch")
+```
+
+### Column
+
+::: {.card}
+**Reading SPC Charts**
+
+Each chart shows batch performance against the statistical mean (red solid line) and control limits (dashed red lines at +/- 3 standard deviations).
+
+- **Red dots** indicate batches outside the control limits — these are signals, not noise
+- Points consistently above/below the mean suggest a process shift
+- Targets: Margin >= 20%, Mortality <= 4%, declining Cost/Bird
+
+SPC helps distinguish normal batch-to-batch variation from signals that need investigation.
+:::
+
+
+# P&L Statement
+
+## Row
+
+```{r}
+#| title: Profit & Loss Statement — Current Batches
+
+# Archive link
+tags$div(
+  class = "alert alert-info mb-3",
+  tags$strong("Looking for older batches?"),
+  " P&L for Batches 4–14 is available in the ",
+  tags$a(href = "archive.html", "Batch Archive Report"), "."
+)
+
+# Batches 1-3 from Excel
+pnl_data <- read_excel("data/JC Poultry Farm - Business Operating Model_v1_250323.xlsx",
+                        sheet = "PnL", skip = 3)
+
+pnl_statement <- pnl_data %>%
+  filter(!is.na(`Category`)) %>%
+  rename(
+    Category = `Category`,
+    "Batch 1" = `Amount (UGX)...3`,
+    "Batch 2" = `Amount (UGX)...4`,
+    "Batch 3" = `Amount (UGX)...5`
+  ) %>%
+  select(Category, "Batch 1", "Batch 2", "Batch 3")
+
+# Batches 15+ from API data (dynamically)
+api_batches <- sort(unique(as.integer(as.character(df_raw$batch[as.character(df_raw$batch) != "3"]))))
+api_batches <- api_batches[api_batches >= 15]
+
+final_pnl <- pnl_statement
+for (b in api_batches) {
+  batch_pnl <- jc_pnl_by_batch(df_raw, as.character(b))
+  final_pnl <- final_pnl %>% left_join(batch_pnl, by = "Category")
+}
+
+# Format all numeric columns
+final_pnl <- final_pnl %>%
+  mutate(across(starts_with("Batch"), ~format(., big.mark = ",", scientific = FALSE)))
+
+# Determine row indices for styling
+indent_rows <- c(2, 4, 5, 6, 7, 9, 10, 11, 12, 13)
+header_rows <- c(1, 3, 8, 14)
+
+final_pnl %>%
+  kbl(caption = "JC Farms Profit & Loss Statement") %>%
+  kable_paper("striped", full_width = FALSE) %>%
+  add_indent(indent_rows) %>%
+  row_spec(header_rows, bold = TRUE, color = "white", background = "#4287f5")
+```
+
+
+# Data
+
+## Row
+
+```{r}
+#| title: Transaction Data
+
+batch_data <- df %>%
+  filter(as.integer(as.character(Batch_Number)) >= 15) %>%
+  select(-c("start", "end"))
+
+datatable(batch_data, filter = "top",
+          options = list(pageLength = 25, scrollX = TRUE))
+```
